@@ -5,7 +5,7 @@ import difflib
 from collections import defaultdict
 
 # === CONFIGURATION ===
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "your_bot_token_here"
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8044842702:AAGOJ3AXzQ-CpUnVaCABFJ-3LXy-mCiRFVg"
 PICKLE_FILE = 'scanned_data.pkl'
 
 bot = telebot.TeleBot(BOT_TOKEN)
