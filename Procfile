@@ -1,1 +1,1 @@
-bash -c "chmod +x start.sh && ./start.sh"
+start: bash -c "chmod +x start.sh && ./start.sh"
