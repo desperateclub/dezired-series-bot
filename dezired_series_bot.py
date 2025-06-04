@@ -1,88 +1,102 @@
 import logging
 import re
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update, Document
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters,
+)
+import os
 
-# === Your Bot Token & Group Chat ID ===
-BOT_TOKEN = '8044842702:AAGOJ3AXzQ-CpUnVaCABFJ-3LXy-mCiRFVg'
-GROUP_CHAT_ID = -1001612892172
-
-# === In-memory database ===
-# We'll store movie keys normalized to a list of links (for multiple parts)
-file_db = {}
-
-# === Logging ===
+# Enable logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-def normalize_text(text: str) -> str:
-    """Normalize text by removing non-alphanumeric characters and lowercasing."""
-    return re.sub(r'[^a-z0-9]', '', text.lower())
+logger = logging.getLogger(__name__)
 
-# === Start command ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"Hey {update.effective_user.first_name}! I'm your Dezired Series Bot 🍿\nSend a movie name to search!"
-    )
+# 🧠 File storage
+file_db = {}
 
-# === Collect files (document-only for now) ===
-async def file_collector(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Replace this with your group chat ID
+GROUP_CHAT_ID = -1001612892172  # replace with actual group ID
+
+# 🔧 Normalize strings for fuzzy matching
+def normalize(text):
+    return re.sub(r"[\W_]+", "", text.lower())
+
+# 🔍 Search handler
+async def handle_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    if message.chat.id != GROUP_CHAT_ID:
+    if not message or not message.text:
         return
 
-    if message.document:
-        # Use caption if present, else fallback to filename
-        raw_title = (message.caption or message.document.file_name or '').strip()
-        if not raw_title:
-            return
-        key = normalize_text(raw_title)
-        link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
-
-        if key in file_db:
-            if link not in file_db[key]:
-                file_db[key].append(link)
-        else:
-            file_db[key] = [link]
-        print(f"📥 Stored: {raw_title} (key: {key}) → {link}")
-
-# === Search ===
-async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if message.chat.id != GROUP_CHAT_ID:
-        return
-
-    user_name = update.effective_user.first_name or "there"
-    query = normalize_text(message.text.strip())
+    query = normalize(message.text.strip())
     if not query:
-        await message.reply_text(f"❌ Please enter a valid movie name, {user_name}!")
         return
 
-    # Find matching keys by partial substring match
-    matched_keys = [key for key in file_db if query in key]
+    results = [link for title, link in file_db.items() if query in normalize(title)]
 
-    if matched_keys:
-        # For now send only the first matched key with all links combined as "master"
-        master_key = matched_keys[0]
-        links = file_db[master_key]
-        response = f"🎬 Hey {user_name}, found these links for your movie:\n" + "\n".join(links)
-        await message.reply_text(response)
+    if results:
+        await message.reply_text(f"🎬 Here's what I found:\n\n" + "\n".join(results))
     else:
-        await message.reply_text(f"❌ Not available, {user_name}! 😓")
+        await message.reply_text("😢 No matching movie found!")
 
-# === Main ===
-def run_bot():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+# 📂 Scan history for files
+async def scan_group_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        await update.message.reply_text("⛔ This command only works in the group.")
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    await update.message.reply_text("📂 Scanning group history for movie files...")
+
+    offset_id = None
+    count = 0
+
+    while True:
+        history = await context.bot.get_chat_history(chat_id=GROUP_CHAT_ID, limit=100, offset_id=offset_id)
+        if not history:
+            break
+
+        for message in history:
+            offset_id = message.message_id
+            doc: Document = message.document
+            if doc:
+                caption = (message.caption or doc.file_name or "untitled").lower()
+                link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
+                file_db[caption] = link
+                count += 1
+
+        if len(history) < 100:
+            break
+
+    await update.message.reply_text(f"✅ Done! Indexed {count} files!")
+
+# 🧠 Start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Hello! Send a movie name to get its link.")
+
+# 🚀 Main bot runner
+def main():
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        print("❌ BOT_TOKEN not set in environment!")
+        return
+
+    app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, file_collector))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), search_movie))
+    app.add_handler(CommandHandler("scan", scan_group_history))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_query))
 
-    print("🎬 DeziredSeriesBot is running...")
+    print("🤖 Bot started...")
     app.run_polling()
 
-# === Start Bot ===
-if __name__ == '__main__':
-    run_bot()
+if __name__ == "__main__":
+    main()
