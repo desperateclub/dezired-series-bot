@@ -1,76 +1,44 @@
-import telebot
 import pickle
 import os
-import difflib
-from collections import defaultdict
+from fuzzywuzzy import process
+import telebot
 
-# === CONFIGURATION ===
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "8044842702:AAGOJ3AXzQ-CpUnVaCABFJ-3LXy-mCiRFVg"
-PICKLE_FILE = 'scanned_data.pkl'
+# Load environment variables
+API_ID = os.getenv("21000508")
+API_HASH = os.getenv("3669ffa5d2e6f6cdedfc3e6591a1ea2e")
+BOT_TOKEN = os.getenv("8044842702:AAGOJ3AXzQ-CpUnVaCABFJ-3LXy-mCiRFVg")
+GROUP_ID = os.getenv("-1001612892172")
 
+# Initialize bot
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# === Load scanned data ===
-if os.path.exists(PICKLE_FILE):
-    with open(PICKLE_FILE, 'rb') as f:
-        scanned_data = pickle.load(f)
-else:
-    scanned_data = {}
-    print(f"{PICKLE_FILE} not found. Starting with empty database.")
+# Load scanned data
+with open('scanned_data.pkl', 'rb') as f:
+    scanned_data = pickle.load(f)
 
-# Convert scanned_data into defaultdict(list) format for easy grouping
-movie_links = defaultdict(list)
-for name, link in scanned_data.items():
-    movie_links[name.lower()].append(link)
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message, "Welcome! Send me a movie name, and I'll fetch the link if it's available.")
 
-# === Save data ===
-def save_data():
-    flattened = {}
-    for title, links in movie_links.items():
-        for link in links:
-            flattened[title] = link
-    with open(PICKLE_FILE, 'wb') as f:
-        pickle.dump(flattened, f)
-
-# === Utility: Find best match for user query ===
-def find_best_match(query):
-    all_titles = list(movie_links.keys())
-    matches = difflib.get_close_matches(query.lower(), all_titles, n=1, cutoff=0.4)
-    return matches[0] if matches else None
-
-# === Handle new documents added to group ===
-@bot.message_handler(content_types=['document', 'video'])
-def handle_new_file(message):
-    if message.chat.type != 'supergroup' and message.chat.type != 'group':
+@bot.message_handler(func=lambda message: True)
+def search_movie(message):
+    query = message.text.strip()
+    if not query:
         return
 
-    file_name = message.document.file_name if message.document else message.video.file_name
-    file_link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
+    best_match, score = process.extractOne(query, scanned_data.keys())
 
-    base_name = file_name.rsplit('.', 1)[0].lower().replace('_', ' ').replace('.', ' ').strip()
-    movie_links[base_name].append(file_link)
-    save_data()
-    print(f"[NEW] Saved: {base_name} -> {file_link}")
-
-# === Handle user queries ===
-@bot.message_handler(func=lambda message: True)
-def handle_query(message):
-    query = message.text.strip().lower()
-    match = find_best_match(query)
-
-    if match:
-        links = movie_links[match]
-        reply = f"🎬 *{match.title()}* - {len(links)} file(s) found:\n"
-        if len(links) > 1:
-            reply += f"[📂 View Files](https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id})\n"
-            for i, link in enumerate(links[:3], 1):  # Preview max 3 links
-                reply += f"{i}. [Link]({link})\n"
+    if score >= 70:
+        result = scanned_data[best_match]
+        if isinstance(result, list):
+            reply_text = f"🎬 **{best_match}** has multiple parts/files:\n\n"
+            reply_text += "\n".join([f"🔗 [Part {i+1}]({link})" for i, link in enumerate(result)])
         else:
-            reply += f"[🎥 Download Now]({links[0]})\n"
-        bot.reply_to(message, reply, parse_mode='Markdown')
-    else:
-        bot.reply_to(message, "❌ Sorry, I couldn't find anything for that. Please try again with a different name.")
+            reply_text = f"🎬 **{best_match}**:\n🔗 [Click to Download]({result})"
 
-# === Start polling ===
-print("Bot is running...")
-bot.infinity_polling()
+        bot.reply_to(message, reply_text, parse_mode='Markdown')
+    else:
+        bot.reply_to(message, "❌ Couldn't find the movie. Try again with a different name or spelling.")
+
+# Start polling
+bot.polling()
