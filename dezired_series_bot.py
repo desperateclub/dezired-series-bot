@@ -29,6 +29,9 @@ def clean_title(title: str) -> str:
 def match_movie(query: str, title: str) -> bool:
     return clean_title(query) in clean_title(title)
 
+def mention_user(update: Update) -> str:
+    return update.effective_user.first_name if update.effective_user else "there"
+
 # === HANDLERS ===
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message and update.message.document:
@@ -39,21 +42,23 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Saved: {title} -> {link}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Hello! I'm DeziredSeriesBot. Just type a movie name and I'll find the link!")
+    name = mention_user(update)
+    await update.message.reply_text(f"👋 Hello {name}! I'm DeziredSeriesBot. Just type a movie name and I'll find the link!")
 
 async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
+    name = mention_user(update)
     query = update.message.text.strip().lower()
     for title, links in movie_links.items():
         if match_movie(query, title):
-            await update.message.reply_text(f"🎬 {title.title()}:\n{links[0]}")
+            await update.message.reply_text(f"🎬 Hey {name}! Found this for *{title.title()}*:\n{links[0]}", parse_mode="Markdown")
             return
-    await update.message.reply_text("😓 Not available... yet!")
+    await update.message.reply_text(f"😓 Sorry {name}, not available yet...")
 
 async def scan_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
-        await update.message.reply_text("⚠️ This command works only in the main group.")
+        await update.message.reply_text("⚠️ This command only works in the main group.")
         return
 
     count = 0
@@ -66,7 +71,8 @@ async def scan_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 movie_links[key].append(link)
                 count += 1
 
-    await update.message.reply_text(f"✅ Scanned and added {count} links from history!")
+    name = mention_user(update)
+    await update.message.reply_text(f"✅ Done, {name}! Scanned and added {count} links from history.")
 
 # === MAIN ===
 def run_bot():
