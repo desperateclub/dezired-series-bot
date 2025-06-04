@@ -1,88 +1,76 @@
-import logging
-from telegram import Update, Document
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+import telebot
+import pickle
+import os
+import difflib
 from collections import defaultdict
-import re
 
-# === BOT CREDENTIALS ===
-BOT_TOKEN = "8044842702:AAGOJ3AXzQ-CpUnVaCABFJ-3LXy-mCiRFVg"
-GROUP_CHAT_ID = -1001612892172
+# === CONFIGURATION ===
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "your_bot_token_here"
+PICKLE_FILE = 'scanned_data.pkl'
 
-# === LOGGING ===
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# === IN-MEMORY DB ===
+# === Load scanned data ===
+if os.path.exists(PICKLE_FILE):
+    with open(PICKLE_FILE, 'rb') as f:
+        scanned_data = pickle.load(f)
+else:
+    scanned_data = {}
+    print(f"{PICKLE_FILE} not found. Starting with empty database.")
+
+# Convert scanned_data into defaultdict(list) format for easy grouping
 movie_links = defaultdict(list)
+for name, link in scanned_data.items():
+    movie_links[name.lower()].append(link)
 
-# === HELPER FUNCTIONS ===
-def clean_title(title: str) -> str:
-    title = re.sub(r'\W+', ' ', title)
-    return title.strip().lower()
-
-def match_movie(query: str, title: str) -> bool:
-    return clean_title(query) in clean_title(title)
-
-def mention_user(update: Update) -> str:
-    return update.effective_user.first_name if update.effective_user else "there"
-
-# === HANDLERS ===
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message and update.message.document:
-        doc: Document = update.message.document
-        title = doc.file_name or "Unnamed"
-        link = f"https://t.me/c/{str(GROUP_CHAT_ID)[4:]}/{update.message.message_id}"
-        movie_links[clean_title(title)].append(link)
-        logger.info(f"Saved: {title} -> {link}")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = mention_user(update)
-    await update.message.reply_text(f"👋 Hello {name}! I'm DeziredSeriesBot. Just type a movie name and I'll find the link!")
-
-async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-    name = mention_user(update)
-    query = update.message.text.strip().lower()
+# === Save data ===
+def save_data():
+    flattened = {}
     for title, links in movie_links.items():
-        if match_movie(query, title):
-            await update.message.reply_text(f"🎬 Hey {name}! Found this for *{title.title()}*:\n{links[0]}", parse_mode="Markdown")
-            return
-    await update.message.reply_text(f"😓 Sorry {name}, not available yet...")
+        for link in links:
+            flattened[title] = link
+    with open(PICKLE_FILE, 'wb') as f:
+        pickle.dump(flattened, f)
 
-async def scan_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != GROUP_CHAT_ID:
-        await update.message.reply_text("⚠️ This command only works in the main group.")
+# === Utility: Find best match for user query ===
+def find_best_match(query):
+    all_titles = list(movie_links.keys())
+    matches = difflib.get_close_matches(query.lower(), all_titles, n=1, cutoff=0.4)
+    return matches[0] if matches else None
+
+# === Handle new documents added to group ===
+@bot.message_handler(content_types=['document', 'video'])
+def handle_new_file(message):
+    if message.chat.type != 'supergroup' and message.chat.type != 'group':
         return
 
-    count = 0
-    async for msg in context.bot.get_chat(GROUP_CHAT_ID).iter_history(limit=1000):
-        if msg.document:
-            title = msg.document.file_name or "Unnamed"
-            link = f"https://t.me/c/{str(GROUP_CHAT_ID)[4:]}/{msg.message_id}"
-            key = clean_title(title)
-            if link not in movie_links[key]:
-                movie_links[key].append(link)
-                count += 1
+    file_name = message.document.file_name if message.document else message.video.file_name
+    file_link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
 
-    name = mention_user(update)
-    await update.message.reply_text(f"✅ Done, {name}! Scanned and added {count} links from history.")
+    base_name = file_name.rsplit('.', 1)[0].lower().replace('_', ' ').replace('.', ' ').strip()
+    movie_links[base_name].append(file_link)
+    save_data()
+    print(f"[NEW] Saved: {base_name} -> {file_link}")
 
-# === MAIN ===
-def run_bot():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("scan_history", scan_history))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), search_movie))
-    print("Starting DeziredSeriesBot...")
-    app.run_polling()
+# === Handle user queries ===
+@bot.message_handler(func=lambda message: True)
+def handle_query(message):
+    query = message.text.strip().lower()
+    match = find_best_match(query)
 
-if __name__ == "__main__":
-    run_bot()
+    if match:
+        links = movie_links[match]
+        reply = f"🎬 *{match.title()}* - {len(links)} file(s) found:\n"
+        if len(links) > 1:
+            reply += f"[📂 View Files](https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id})\n"
+            for i, link in enumerate(links[:3], 1):  # Preview max 3 links
+                reply += f"{i}. [Link]({link})\n"
+        else:
+            reply += f"[🎥 Download Now]({links[0]})\n"
+        bot.reply_to(message, reply, parse_mode='Markdown')
+    else:
+        bot.reply_to(message, "❌ Sorry, I couldn't find anything for that. Please try again with a different name.")
+
+# === Start polling ===
+print("Bot is running...")
+bot.infinity_polling()
