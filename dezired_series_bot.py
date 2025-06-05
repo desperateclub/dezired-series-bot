@@ -1,10 +1,11 @@
 import os
 import pickle
 import telebot
-from telebot import types
 from fuzzywuzzy import process
+import tempfile
+import shutil
 
-# Load environment variables correctly
+# Load environment variables
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -17,9 +18,8 @@ if not BOT_TOKEN:
 # Initialize bot
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Load or initialize scanned data
+# Safe loading of scanned_data.pkl
 scanned_data = {}
-
 if os.path.exists("scanned_data.pkl"):
     try:
         with open("scanned_data.pkl", "rb") as f:
@@ -28,12 +28,14 @@ if os.path.exists("scanned_data.pkl"):
         print("⚠️ scanned_data.pkl was empty or corrupted. Starting fresh.")
         scanned_data = {}
 
-# Save function to update scanned_data.pkl
+# Safe saving with atomic write
 def save_data():
-    with open("scanned_data.pkl", "wb") as f:
-        pickle.dump(scanned_data, f)
+    with tempfile.NamedTemporaryFile('wb', delete=False, dir='.') as tf:
+        pickle.dump(scanned_data, tf)
+        tempname = tf.name
+    shutil.move(tempname, "scanned_data.pkl")
 
-# Detect new files sent to group and update scanned_data
+# Handle incoming files
 @bot.message_handler(content_types=["document", "video"])
 def handle_new_file(message):
     file_name = message.document.file_name if message.document else message.video.file_name
@@ -41,7 +43,7 @@ def handle_new_file(message):
 
     base_name = os.path.splitext(file_name)[0].strip().lower()
 
-    # Add or update file entry
+    # Prioritize grouping by matching name
     if base_name in scanned_data:
         if isinstance(scanned_data[base_name], list):
             scanned_data[base_name].append(file_link)
@@ -55,15 +57,15 @@ def handle_new_file(message):
 # Start command
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
-    bot.reply_to(message, "👋 Welcome to Dezired Series Bot!\n\nSend me a movie name and I’ll fetch the download link if it’s available.")
+    bot.reply_to(message, "🎬 Hey there! I’m Sydney Sweeney, the movie matchmaker of *Dezired Series*! Just drop a movie name and I’ll do my thing 😉")
 
-# Movie search
+# Search for movie
 @bot.message_handler(func=lambda message: True, content_types=["text"])
 def search_movie(message):
     query = message.text.strip().lower()
 
     if not scanned_data:
-        bot.reply_to(message, "⚠️ No data available yet.")
+        bot.reply_to(message, "⚠️ Nothing in the collection yet!")
         return
 
     best_match, score = process.extractOne(query, scanned_data.keys())
@@ -71,14 +73,13 @@ def search_movie(message):
     if score >= 70:
         result = scanned_data[best_match]
         if isinstance(result, list):
-            reply_text = f"🎬 **{best_match.title()}** has multiple parts/files:\n\n"
-            reply_text += "\n".join([f"🔗 [Part {i + 1}]({link})" for i, link in enumerate(result)])
+            reply_text = f"🎬 **{best_match.title()}** has multiple parts:\n\n"
+            reply_text += "\n".join([f"🔗 [Part {i+1}]({link})" for i, link in enumerate(result)])
         else:
             reply_text = f"🎬 **{best_match.title()}**:\n🔗 [Click to Download]({result})"
-
         bot.reply_to(message, reply_text, parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Movie not found. Please check the spelling or wait for admins to upload the file if available.")
+        bot.reply_to(message, "❌ Couldn't find it! Maybe ask the admins to fetch it for you.")
 
-# Start polling
+# Run bot
 bot.polling()
