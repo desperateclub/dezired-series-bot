@@ -2,6 +2,7 @@ import os
 import pickle
 import telebot
 from telebot import types
+from fuzzywuzzy import process
 
 # Load environment variables correctly
 API_ID = os.getenv("API_ID")
@@ -52,7 +53,7 @@ def handle_new_file(message):
 def send_welcome(message):
     bot.reply_to(message, "👋 Welcome to Dezired Series Bot!\n\nSend me a movie name and I’ll fetch the download link if it’s available.")
 
-# Movie search
+# Movie search with fuzzy matching
 @bot.message_handler(func=lambda message: True, content_types=["text"])
 def search_movie(message):
     query = message.text.strip().lower()
@@ -61,17 +62,22 @@ def search_movie(message):
         bot.reply_to(message, "⚠️ No data available yet.")
         return
 
-    if query in scanned_data:
-        result = scanned_data[query]
+    best_match, score = process.extractOne(query, scanned_data.keys())
+
+    if score >= 70:
+        result = scanned_data[best_match]
         if isinstance(result, list):
-            reply_text = f"🎬 **{query.title()}** has multiple parts/files:\n\n"
+            reply_text = f"🎬 **{best_match.title()}** has multiple parts/files:\n\n"
             reply_text += "\n".join([f"🔗 [Part {i + 1}]({link})" for i, link in enumerate(result)])
         else:
-            reply_text = f"🎬 **{query.title()}**:\n🔗 [Click to Download]({result})"
+            reply_text = f"🎬 **{best_match.title()}**:\n🔗 [Click to Download]({result})"
 
         bot.reply_to(message, reply_text, parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Movie not found. Please double-check the spelling, or wait for the admins. If the movie is available, they’ll add it to the collection soon.")
+        bot.reply_to(
+            message,
+            "❌ Movie not found.\n\nPlease double-check the name or spelling. If the movie is available, the admins will upload it soon."
+        )
 
 # Start polling
 bot.polling()
