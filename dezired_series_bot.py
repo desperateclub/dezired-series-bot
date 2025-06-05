@@ -1,6 +1,5 @@
 import os
 import pickle
-from fuzzywuzzy import process
 import telebot
 from telebot import types
 
@@ -24,12 +23,10 @@ if os.path.exists("scanned_data.pkl"):
     with open("scanned_data.pkl", "rb") as f:
         scanned_data = pickle.load(f)
 
-
 # Save function to update scanned_data.pkl
 def save_data():
     with open("scanned_data.pkl", "wb") as f:
         pickle.dump(scanned_data, f)
-
 
 # Detect new files sent to group and update scanned_data
 @bot.message_handler(content_types=["document", "video"])
@@ -39,23 +36,21 @@ def handle_new_file(message):
 
     base_name = os.path.splitext(file_name)[0].strip().lower()
 
-    # Add or update file entry
+    # Add or update file entry (newer files take priority)
     if base_name in scanned_data:
         if isinstance(scanned_data[base_name], list):
-            scanned_data[base_name].append(file_link)
+            scanned_data[base_name].insert(0, file_link)
         else:
-            scanned_data[base_name] = [scanned_data[base_name], file_link]
+            scanned_data[base_name] = [file_link, scanned_data[base_name]]
     else:
         scanned_data[base_name] = file_link
 
     save_data()
 
-
 # Start command
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     bot.reply_to(message, "👋 Welcome to Dezired Series Bot!\n\nSend me a movie name and I’ll fetch the download link if it’s available.")
-
 
 # Movie search
 @bot.message_handler(func=lambda message: True, content_types=["text"])
@@ -66,20 +61,17 @@ def search_movie(message):
         bot.reply_to(message, "⚠️ No data available yet.")
         return
 
-    best_match, score = process.extractOne(query, scanned_data.keys())
-
-    if score >= 70:
-        result = scanned_data[best_match]
+    if query in scanned_data:
+        result = scanned_data[query]
         if isinstance(result, list):
-            reply_text = f"🎬 **{best_match.title()}** has multiple parts/files:\n\n"
+            reply_text = f"🎬 **{query.title()}** has multiple parts/files:\n\n"
             reply_text += "\n".join([f"🔗 [Part {i + 1}]({link})" for i, link in enumerate(result)])
         else:
-            reply_text = f"🎬 **{best_match.title()}**:\n🔗 [Click to Download]({result})"
+            reply_text = f"🎬 **{query.title()}**:\n🔗 [Click to Download]({result})"
 
         bot.reply_to(message, reply_text, parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Couldn't find the movie. Try again with a different name or correct spelling.")
-
+        bot.reply_to(message, "❌ Movie not found. Please double-check the spelling, or wait for the admins. If the movie is available, they’ll add it to the collection soon.")
 
 # Start polling
 bot.polling()
