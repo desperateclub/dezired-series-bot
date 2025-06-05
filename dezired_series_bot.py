@@ -21,8 +21,12 @@ bot = telebot.TeleBot(BOT_TOKEN)
 scanned_data = {}
 
 if os.path.exists("scanned_data.pkl"):
-    with open("scanned_data.pkl", "rb") as f:
-        scanned_data = pickle.load(f)
+    try:
+        with open("scanned_data.pkl", "rb") as f:
+            scanned_data = pickle.load(f)
+    except (EOFError, pickle.UnpicklingError):
+        print("⚠️ scanned_data.pkl was empty or corrupted. Starting fresh.")
+        scanned_data = {}
 
 # Save function to update scanned_data.pkl
 def save_data():
