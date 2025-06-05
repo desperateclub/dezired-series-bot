@@ -37,12 +37,12 @@ def handle_new_file(message):
 
     base_name = os.path.splitext(file_name)[0].strip().lower()
 
-    # Add or update file entry (newer files take priority)
+    # Add or update file entry
     if base_name in scanned_data:
         if isinstance(scanned_data[base_name], list):
-            scanned_data[base_name].insert(0, file_link)
+            scanned_data[base_name].append(file_link)
         else:
-            scanned_data[base_name] = [file_link, scanned_data[base_name]]
+            scanned_data[base_name] = [scanned_data[base_name], file_link]
     else:
         scanned_data[base_name] = file_link
 
@@ -53,7 +53,7 @@ def handle_new_file(message):
 def send_welcome(message):
     bot.reply_to(message, "👋 Welcome to Dezired Series Bot!\n\nSend me a movie name and I’ll fetch the download link if it’s available.")
 
-# Movie search with fuzzy matching
+# Movie search
 @bot.message_handler(func=lambda message: True, content_types=["text"])
 def search_movie(message):
     query = message.text.strip().lower()
@@ -74,10 +74,7 @@ def search_movie(message):
 
         bot.reply_to(message, reply_text, parse_mode="Markdown")
     else:
-        bot.reply_to(
-            message,
-            "❌ Movie not found.\n\nPlease double-check the name or spelling. If the movie is available, the admins will upload it soon."
-        )
+        bot.reply_to(message, "❌ Movie not found. Please check the spelling or wait for admins to upload the file if available.")
 
 # Start polling
 bot.polling()
