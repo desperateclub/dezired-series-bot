@@ -4,17 +4,18 @@ import telebot
 from fuzzywuzzy import process
 import re
 import random
+import time
+from threading import Thread
 
 # Load environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing. Set it in your environment variables.")
 
 bot = telebot.TeleBot(BOT_TOKEN)
+scanned_data = {}
 
 # Load scanned data
-scanned_data = {}
 if os.path.exists("scanned_data.pkl"):
     try:
         with open("scanned_data.pkl", "rb") as f:
@@ -29,10 +30,9 @@ def clean_title(name):
     name = re.sub(r'[^a-z0-9\s]', '', name)
     return re.sub(r'\s+', ' ', name).strip()
 
-# Check type: movie or series
+# Distinguish movies and series
 movie_keywords = ["movie", "film"]
 series_keywords = ["series", "episode", "season"]
-
 def detect_type(text):
     text = text.lower()
     if any(word in text for word in series_keywords):
@@ -41,7 +41,39 @@ def detect_type(text):
         return "movie"
     return None
 
-# Detect greeting or flirting
+# Emoji generator based on movie/series type
+def emoji_for_title(title):
+    if re.search(r'\b(comedy|funny|lol|🤣|😂)\b', title.lower()):
+        return "😂"
+    elif re.search(r'\b(action|war|battle|spy|mission)\b', title.lower()):
+        return "🔥"
+    elif re.search(r'\b(romance|love|romcom|❤️|😍)\b', title.lower()):
+        return "😍"
+    else:
+        return "🎬"
+
+# Auto-delete messages older than 1 day (run as background thread)
+def cleanup_scanned_data():
+    while True:
+        changed = False
+        now = time.time()
+        for title in list(scanned_data.keys()):
+            entry = scanned_data[title]
+            if isinstance(entry, dict) and 'timestamp' in entry:
+                if now - entry['timestamp'] > 86400:  # 1 day
+                    del scanned_data[title]
+                    changed = True
+        if changed:
+            with open("scanned_data.pkl", "wb") as f:
+                pickle.dump(scanned_data, f)
+        time.sleep(3600)
+
+Thread(target=cleanup_scanned_data, daemon=True).start()
+
+# Ignore messages like '.', '..', '...', etc.
+symbol_pattern = re.compile(r'^[\s.,!@#$%^&*()_+=\-]{1,5}$')
+
+# Flirty replies
 flirt_keywords = ["hi", "hello", "hey", "beautiful", "sexy", "date", "love"]
 @bot.message_handler(func=lambda message: any(word in message.text.lower() for word in flirt_keywords))
 def handle_flirts(message):
@@ -53,20 +85,20 @@ def handle_flirts(message):
     ]
     bot.reply_to(message, random.choice(replies))
 
-# Handle all text messages
+# Main message responder
 @bot.message_handler(func=lambda message: True, content_types=["text"])
 def respond_to_query(message):
-    query = message.text.strip().lower()
-    clean_query = clean_title(query)
+    query = message.text.strip()
+    if symbol_pattern.match(query):
+        return  # Ignore
 
+    clean_query = clean_title(query)
     if not scanned_data:
         bot.reply_to(message, "⚠️ No files added yet, hun. Wait for the admins.")
         return
 
-    # Detect type if mentioned
     content_type = detect_type(query)
 
-    # Filter scanned_data for closest match based on cleaned title
     cleaned_db = {clean_title(k): k for k in scanned_data.keys()}
     best_matches = process.extract(clean_query, cleaned_db.keys(), limit=5)
     matches_with_links = []
@@ -75,17 +107,18 @@ def respond_to_query(message):
         original_title = cleaned_db[match]
         if score >= 60:
             if content_type == "movie" and re.search(r's\d+e\d+', original_title, re.I):
-                continue  # skip episodes if user wants a movie
+                continue
             if content_type == "series" and not re.search(r's\d+e\d+', original_title, re.I):
-                continue  # skip movies if user wants a series
+                continue
+            data = scanned_data[original_title]['link'] if isinstance(scanned_data[original_title], dict) else scanned_data[original_title]
+            emoji = emoji_for_title(original_title)
 
-            data = scanned_data[original_title]
             if isinstance(data, list):
                 links = "\n".join([f"🔗 [Part {i+1}]({link})" for i, link in enumerate(data)])
             else:
                 links = f"🔗 [Click to Download]({data})"
 
-            matches_with_links.append(f"🎬 **{original_title}**\n{links}")
+            matches_with_links.append(f"{emoji} **{original_title}**\n{links}")
 
     if matches_with_links:
         response = "Here’s what I found for you, babe 😉\n\n" + "\n\n".join(matches_with_links)
@@ -93,24 +126,35 @@ def respond_to_query(message):
     else:
         bot.reply_to(message, "I didn’t find that one 😔 Check the name or wait for the admins to bless us with it.")
 
-# Update scanned data when new files arrive
+# File uploads
 @bot.message_handler(content_types=["document", "video"])
 def handle_new_file(message):
-    file_name = message.document.file_name if message.document else message.video.file_name
-    file_link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
+    file = message.document or message.video
+    if not file:
+        return
 
+    file_name = file.file_name
+    file_link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
     base_name = clean_title(os.path.splitext(file_name)[0])
 
-    if base_name in scanned_data:
-        if isinstance(scanned_data[base_name], list):
-            scanned_data[base_name].append(file_link)
-        else:
-            scanned_data[base_name] = [scanned_data[base_name], file_link]
+    entry = scanned_data.get(base_name, {})
+    if isinstance(entry, dict):
+        entry.setdefault("link", []).append(file_link)
+        entry["timestamp"] = time.time()
+    elif isinstance(entry, list):
+        scanned_data[base_name] = {"link": entry + [file_link], "timestamp": time.time()}
+    elif entry:
+        scanned_data[base_name] = {"link": [entry, file_link], "timestamp": time.time()}
     else:
-        scanned_data[base_name] = file_link
+        scanned_data[base_name] = {"link": file_link, "timestamp": time.time()}
 
     with open("scanned_data.pkl", "wb") as f:
         pickle.dump(scanned_data, f)
+
+# Pinned message handler
+@bot.message_handler(func=lambda message: message.pinned_message is not None)
+def handle_pinned(message):
+    bot.reply_to(message, "⭐ Featured content pinned! You better not miss this one 😍")
 
 # Start Sydney
 print("🌀 Sydney Sweeney is online and ready to slay 🎬")
