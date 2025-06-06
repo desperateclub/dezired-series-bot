@@ -1,10 +1,9 @@
 import os
 import pickle
+import telebot
+from fuzzywuzzy import process
 import re
 import random
-from fuzzywuzzy import process
-import telebot
-from telebot import types
 
 # Load environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -17,25 +16,85 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Load scanned data
 scanned_data = {}
 if os.path.exists("scanned_data.pkl"):
-    with open("scanned_data.pkl", "rb") as f:
-        try:
+    try:
+        with open("scanned_data.pkl", "rb") as f:
             scanned_data = pickle.load(f)
-        except EOFError:
-            scanned_data = {}
+    except Exception:
+        scanned_data = {}
 
-# Title cleaner to normalize movie/series names
-def clean_title(title):
-    title = re.sub(r'\.(\d{3,4}p|BluRay|WEBRip|x264|XviD|HDRip|HEVC|AAC|MP3|DDP|EVO|RARBG|YIFY|AMZN|NF|HD|SD)', '', title, flags=re.IGNORECASE)
-    title = re.sub(r'[^a-zA-Z0-9\s]', ' ', title)
-    title = re.sub(r'\s+', ' ', title).strip()
-    return title.lower()
+# Clean title to ignore resolution, quality etc.
+def clean_title(name):
+    name = name.lower()
+    name = re.sub(r'\b(720p|1080p|480p|2160p|4k|x264|x265|bluray|webrip|web-dl|hdrip|dvdrip|hevc|h\.264|h264|h\.265|h265|multi|dubbed|uncut|ddp5\.1|dd5\.1|esub|eng|hin|dual audio)\b', '', name)
+    name = re.sub(r'[^a-z0-9\s]', '', name)
+    return re.sub(r'\s+', ' ', name).strip()
 
-# Save function to update scanned_data.pkl
-def save_data():
-    with open("scanned_data.pkl", "wb") as f:
-        pickle.dump(scanned_data, f)
+# Check type: movie or series
+movie_keywords = ["movie", "film"]
+series_keywords = ["series", "episode", "season"]
 
-# Handle new document/video uploads
+def detect_type(text):
+    text = text.lower()
+    if any(word in text for word in series_keywords):
+        return "series"
+    if any(word in text for word in movie_keywords):
+        return "movie"
+    return None
+
+# Detect greeting or flirting
+flirt_keywords = ["hi", "hello", "hey", "beautiful", "sexy", "date", "love"]
+@bot.message_handler(func=lambda message: any(word in message.text.lower() for word in flirt_keywords))
+def handle_flirts(message):
+    replies = [
+        "Oh hey there 👀 You up to something?",
+        "I’m just a bot, but flattered 😏",
+        "Sydney’s busy curating 🔥 content. What’s up?",
+        "Hehe. Focus on movies, loverboy 💋"
+    ]
+    bot.reply_to(message, random.choice(replies))
+
+# Handle all text messages
+@bot.message_handler(func=lambda message: True, content_types=["text"])
+def respond_to_query(message):
+    query = message.text.strip().lower()
+    clean_query = clean_title(query)
+
+    if not scanned_data:
+        bot.reply_to(message, "⚠️ No files added yet, hun. Wait for the admins.")
+        return
+
+    # Detect type if mentioned
+    content_type = detect_type(query)
+
+    # Filter scanned_data for closest match based on cleaned title
+    cleaned_db = {clean_title(k): k for k in scanned_data.keys()}
+    best_matches = process.extract(clean_query, cleaned_db.keys(), limit=5)
+    matches_with_links = []
+
+    for match, score in best_matches:
+        original_title = cleaned_db[match]
+        if score >= 60:
+            if content_type == "movie" and re.search(r's\d+e\d+', original_title, re.I):
+                continue  # skip episodes if user wants a movie
+            if content_type == "series" and not re.search(r's\d+e\d+', original_title, re.I):
+                continue  # skip movies if user wants a series
+
+            data = scanned_data[original_title]
+            if isinstance(data, list):
+                links = "\n".join([f"🔗 [Part {i+1}]({link})" for i, link in enumerate(data)])
+            else:
+                links = f"🔗 [Click to Download]({data})"
+
+            matches_with_links.append(f"🎬 **{original_title}**\n{links}")
+
+    if matches_with_links:
+        response = "Here’s what I found for you, babe 😉\n\n" + "\n\n".join(matches_with_links)
+        bot.reply_to(message, response, parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "I didn’t find that one 😔 Check the name or wait for the admins to bless us with it.")
+
+# Update scanned data when new files arrive
+@bot.message_handler(content_types=["document", "video"])
 def handle_new_file(message):
     file_name = message.document.file_name if message.document else message.video.file_name
     file_link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
@@ -50,73 +109,9 @@ def handle_new_file(message):
     else:
         scanned_data[base_name] = file_link
 
-    save_data()
+    with open("scanned_data.pkl", "wb") as f:
+        pickle.dump(scanned_data, f)
 
-@bot.message_handler(content_types=["document", "video"])
-def on_file_upload(message):
-    handle_new_file(message)
-
-# Intelligent and sassy responses
-@bot.message_handler(func=lambda m: True, content_types=["text"])
-def on_text(message):
-    text = message.text.strip().lower()
-
-    greetings = ["hi", "hello", "hey", "who are you"]
-    flirts = ["i love you", "marry me", "are you single"]
-
-    if any(greet in text for greet in greetings):
-        bot.reply_to(message, "Hey there! Sydney Sweeney here, your one-stop entertainment goddess 💁‍♀️")
-        return
-
-    if any(flirt in text for flirt in flirts):
-        bot.reply_to(message, "Aww, you’re cute 😘 but I only date people who binge-watch like a pro.")
-        return
-
-    if text in ["suggest a movie", "movie please", "suggest movie"]:
-        movies = [k for k in scanned_data if 's01' not in k and 'season' not in k]
-        if movies:
-            choice = random.choice(movies)
-            result = scanned_data[choice]
-            send_result(message, choice, result)
-        else:
-            bot.reply_to(message, "😬 No movies in my stash right now. Ask the admins maybe?")
-        return
-
-    if text in ["suggest a series", "series please", "suggest series"]:
-        series = [k for k in scanned_data if 's01' in k or 'season' in k]
-        if series:
-            choice = random.choice(series)
-            result = scanned_data[choice]
-            send_result(message, choice, result)
-        else:
-            bot.reply_to(message, "😬 I don’t see any series yet. Ask the admins to drop some episodes!")
-        return
-
-    # Try to match with year
-    year_match = re.search(r'(\d{4})', text)
-    search_title = clean_title(text)
-
-    candidates = list(scanned_data.keys())
-    best_match, score = process.extractOne(search_title, candidates)
-
-    if score >= 65:
-        result = scanned_data[best_match]
-        send_result(message, best_match, result)
-    else:
-        suggestions = [t.title() for t, s in process.extract(search_title, candidates, limit=3) if s > 50]
-        suggestion_msg = "\nDid you mean: " + ", ".join(suggestions) if suggestions else ""
-        bot.reply_to(message, f"😕 Couldn't find that. Maybe it's not uploaded yet.{suggestion_msg}")
-
-# Helper to send results
-
-def send_result(message, title, result):
-    if isinstance(result, list):
-        reply_text = f"🎬 *{title.title()}* has multiple files:\n\n"
-        reply_text += "\n".join([f"🔗 [Part {i + 1}]({link})" for i, link in enumerate(result)])
-    else:
-        reply_text = f"🎬 *{title.title()}*:\n🔗 [Click to Download]({result})"
-
-    bot.reply_to(message, reply_text, parse_mode="Markdown")
-
-print("Sydney Sweeney is live and sassier than ever 💅")
+# Start Sydney
+print("🌀 Sydney Sweeney is online and ready to slay 🎬")
 bot.polling()
