@@ -80,7 +80,7 @@ def get_greeting():
 def start(message):
     try:
         bot.reply_to(message, f"{get_greeting()}\nI’m your Dezired Series movie hunter! Search a title or say 'hi' for some fun! 😘")
-    except telebot.apihelper.ApiTelegramException as e:
+    except telebot.handler_exceptions.TelegramAPIError as e:
         logger.error(f"Failed to reply to /start (message {message.message_id}): {e}")
         bot.send_message(message.chat.id, f"{get_greeting()}\nI’m your Dezired Series movie hunter! Search a title or say 'hi' for some fun! 😘")
 
@@ -88,7 +88,7 @@ def start(message):
 def flirt_reply(message):
     try:
         bot.reply_to(message, random.choice(flirty_responses))
-    except telebot.apihelper.ApiTelegramException as e:
+    except telebot.handler_exceptions.TelegramAPIError as e:
         logger.error(f"Failed to reply to flirt message {message.message_id}: {e}")
         bot.send_message(message.chat.id, random.choice(flirty_responses))
 
@@ -98,14 +98,14 @@ def ignore_symbols(msg):
     return
 
 # Handle movie/series search
-@bot.message_handler(func=lambda msg: True, content_types=['text'])
+@bot.message_handler(content_types=['text'])
 def handle_search(message):
     logger.info(f"Received query: {message.text} from user: {message.from_user.id}")
     query = clean_title(message.text)
     if not scanned_data:
         try:
             bot.reply_to(message, f"{get_greeting()}\nNothing’s here yet, darling 😢 Ask admins to upload some movies.")
-        except telebot.apihelper.ApiTelegramException as e:
+        except telebot.handler_exceptions.TelegramAPIError as e:
             logger.error(f"Failed to reply to empty search (message {message.message_id}): {e}")
             bot.send_message(message.chat.id, f"{get_greeting()}\nNothing’s here yet, darling 😢 Ask admins to upload some movies.")
         return
@@ -129,13 +129,13 @@ def handle_search(message):
     if response:
         try:
             bot.reply_to(message, f"{get_greeting()}\nHere’s what I found for you, babe 🥵\n\n" + "\n\n".join(response), parse_mode="Markdown")
-        except telebot.apihelper.ApiTelegramException as e:
+        except telebot.handler_exceptions.TelegramAPIError as e:
             logger.error(f"Failed to reply to search (message {message.message_id}): {e}")
             bot.send_message(message.chat.id, f"{get_greeting()}\nHere’s what I found for you, babe 🥵\n\n" + "\n\n".join(response), parse_mode="Markdown")
     else:
         try:
             bot.reply_to(message, f"{get_greeting()}\nCouldn’t find that 😢 Maybe it’s not uploaded yet or your spelling's off.")
-        except telebot.apihelper.ApiTelegramException as e:
+        except telebot.handler_exceptions.TelegramAPIError as e:
             logger.error(f"Failed to reply to no-results search (message {message.message_id}): {e}")
             bot.send_message(message.chat.id, f"{get_greeting()}\nCouldn’t find that 😢 Maybe it’s not uploaded yet or your spelling's off.")
 
@@ -170,4 +170,4 @@ def store_files(message):
 
 # Start bot
 logger.info("💋 Sydney Sweeney bot is now running...")
-bot.polling()
+bot.infinity_polling()
