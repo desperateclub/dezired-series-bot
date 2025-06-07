@@ -1,149 +1,138 @@
 import os
 import pickle
-import telebot
-from fuzzywuzzy import process
-import re
+import time
 import random
-from datetime import datetime, timedelta
+import re
+from collections import defaultdict
+from datetime import datetime, timezone
 
-# Load environment variable
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+import telebot
+from telebot.types import Message
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is missing. Set it in your environment variables.")
+API_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID", "-1001234567890"))
+DATA_FILE = "scanned_data.pkl"
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(API_TOKEN)
+scanned_data = defaultdict(list)
 
-# Load scanned data
-scanned_data = {}
-if os.path.exists("scanned_data.pkl"):
-    try:
-        with open("scanned_data.pkl", "rb") as f:
-            scanned_data = pickle.load(f)
-    except Exception:
-        scanned_data = {}
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "rb") as f:
+        scanned_data = pickle.load(f)
 
-# Clean title for matching
-def clean_title(name):
-    name = name.lower()
-    name = re.sub(r'\b(720p|1080p|480p|2160p|4k|x264|x265|bluray|webrip|web-dl|hdrip|dvdrip|hevc|h\.264|h264|h\.265|h265|multi|dubbed|uncut|ddp5\.1|dd5\.1|esub|eng|hin|dual audio)\b', '', name)
-    name = re.sub(r'[^a-z0-9\s]', '', name)
-    return re.sub(r'\s+', ' ', name).strip()
+symbol_only_pattern = re.compile(r"^[.,\\-\\s]*$")
 
-# Detect content type
-movie_keywords = ["movie", "film"]
-series_keywords = ["series", "episode", "season"]
+emoji_map = {
+    "romance": "😍",
+    "action": "🔥",
+    "comedy": "😂",
+    "horror": "👻",
+    "sci-fi": "🤖",
+    "thriller": "😱",
+    "anime": "🌸",
+    "drama": "🎭"
+}
 
-def detect_type(text):
-    text = text.lower()
-    if any(word in text for word in series_keywords):
-        return "series"
-    if any(word in text for word in movie_keywords):
-        return "movie"
-    return None
+fun_facts = [
+    "🎬 Did you know? The first feature film ever made was 'The Story of the Kelly Gang' in 1906.",
+    "🍿 Popcorn became popular in theaters during the Great Depression because it was cheap.",
+    "🎥 The longest movie ever made is over 85 hours long! It's called 'Logistics'.",
+    "📽️ Alfred Hitchcock never won an Oscar for Best Director.",
+    "🎞️ Spider-Man was the first film to make $100 million in a single weekend."
+]
 
-# Detect flirty greetings
-flirt_keywords = ["hi", "hello", "hey", "beautiful", "sexy", "date", "love"]
-@bot.message_handler(func=lambda message: message.text.lower().strip() in flirt_keywords)
-def handle_flirts(message):
-    replies = [
-        "Oh hey there 👀 You up to something?",
-        "I’m just a bot, but flattered 😏",
-        "Sydney’s busy curating 🔥 content. What’s up?",
-        "Hehe. Focus on movies, loverboy 💋"
-    ]
-    bot.reply_to(message, random.choice(replies))
-
-# Handle regular messages
-@bot.message_handler(func=lambda message: True, content_types=["text"])
-def respond_to_query(message):
-    query = message.text.strip().lower()
-    clean_query = clean_title(query)
-
-    # Skip plain symbols
-    if clean_query in [".", ",", "..", "..."]:
-        return
-
-    if not scanned_data:
-        bot.reply_to(message, "⚠️ No files added yet, hun. Wait for the admins.")
-        return
-
-    content_type = detect_type(query)
-
-    # Debug
-    print(f"User Query: {query}")
-    print(f"Cleaned Query: {clean_query}")
-    print(f"Available Files: {list(scanned_data.keys())}")
-
-    cleaned_db = {}
-    for original_title in scanned_data:
-        cleaned = clean_title(original_title)
-        cleaned_db[cleaned] = original_title
-
-    best_matches = process.extract(clean_query, list(cleaned_db.keys()), limit=5)
-    matches_with_links = []
-
-    for match, score in best_matches:
-        original_title = cleaned_db[match]
-        if score >= 60:
-            if content_type == "movie" and re.search(r's\d+e\d+', original_title, re.I):
-                continue
-            if content_type == "series" and not re.search(r's\d+e\d+', original_title, re.I):
-                continue
-
-            file_info = scanned_data[original_title]
-            links = ""
-            if isinstance(file_info, list):
-                links = "\n".join([f"🔗 [Part {i+1}]({info['link']})" for i, info in enumerate(file_info)])
-                master_link = file_info[0]['link']
-                links = f"🧲 [Master Link]({master_link})\n" + links
-            elif isinstance(file_info, dict):
-                links = f"🔗 [Click to Download]({file_info['link']})"
-
-            matches_with_links.append(f"🎬 **{original_title}**\n{links}")
-
-    if matches_with_links:
-        response = "Here’s what I found for you, babe 😉\n\n" + "\n\n".join(matches_with_links)
-        bot.reply_to(message, response, parse_mode="Markdown")
-    else:
-        bot.reply_to(message, "I didn’t find that one 😔 Check the name or wait for the admins to bless us with it.")
-
-# Handle file uploads
-@bot.message_handler(content_types=["document", "video"])
-def handle_new_file(message):
-    file_name = message.document.file_name if message.document else message.video.file_name
-    file_link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
-    timestamp = datetime.utcnow().timestamp()
-
-    base_name = clean_title(os.path.splitext(file_name)[0])
-    file_entry = {"link": file_link, "timestamp": timestamp}
-
-    if base_name in scanned_data:
-        if isinstance(scanned_data[base_name], list):
-            scanned_data[base_name].append(file_entry)
-        else:
-            scanned_data[base_name] = [scanned_data[base_name], file_entry]
-    else:
-        scanned_data[base_name] = file_entry
-
-    with open("scanned_data.pkl", "wb") as f:
+def save_data():
+    with open(DATA_FILE, "wb") as f:
         pickle.dump(scanned_data, f)
 
-# Auto-delete old entries (1 day)
-def purge_old_data():
-    now = datetime.utcnow().timestamp()
-    updated_data = {}
-    for k, v in scanned_data.items():
-        if isinstance(v, list):
-            new_list = [item for item in v if now - item["timestamp"] < 86400]
-            if new_list:
-                updated_data[k] = new_list
-        elif isinstance(v, dict) and now - v["timestamp"] < 86400:
-            updated_data[k] = v
-    return updated_data
+def search_movie(query):
+    query_lower = query.lower()
+    master_result = {}
+    part_links = []
 
-# Purge periodically before polling
-scanned_data = purge_old_data()
+    for title, files in scanned_data.items():
+        if query_lower in title.lower():
+            part_links = files
+            master_result["title"] = title
+            master_result["files"] = files
+            break
+
+    return master_result, part_links
+
+def clean_old_entries():
+    now = datetime.now(timezone.utc).timestamp()
+    for title in list(scanned_data.keys()):
+        filtered = [f for f in scanned_data[title] if now - f["timestamp"] < 86400]
+        if filtered:
+            scanned_data[title] = filtered
+        else:
+            del scanned_data[title]
+    save_data()
+
+@bot.message_handler(func=lambda msg: True, content_types=["text"])
+def handle_message(message: Message):
+    if message.chat.id != GROUP_ID:
+        return
+
+    query = message.text.strip()
+    if symbol_only_pattern.match(query):
+        return
+
+    if query.lower() in ["hi", "hello", "hey"]:
+        bot.reply_to(message, f"Hey {message.from_user.first_name}! 🍿 Ask me for any movie!")
+        return
+
+    clean_old_entries()
+    result, parts = search_movie(query)
+    if result:
+        title = result["title"]
+        reply = f"🎬 *{title}*\n\n"
+
+        for category in emoji_map:
+            if category in title.lower():
+                reply += emoji_map[category] + "\n"
+                break
+
+        reply += "\nHere’s your download links:\n"
+        for file in parts:
+            reply += f"🔗 [{file['name']}]({file['link']})\n"
+
+        reply += f"\n🧲 *Master Link:* Coming soon or use parts above!\n"
+        reply += f"\n💡 {random.choice(fun_facts)}"
+
+        bot.reply_to(message, reply, parse_mode="Markdown")
+    else:
+        suggestions = [
+            title for title in scanned_data.keys()
+            if query.lower()[:4] in title.lower()
+        ][:3]
+
+        suggestion_text = ""
+        if suggestions:
+            suggestion_text = "\n\n🔍 Did you mean:\n" + "\n".join(f"• {s}" for s in suggestions)
+
+        bot.reply_to(message, f"❌ Couldn't find anything for *{query}*{suggestion_text}", parse_mode="Markdown")
+
+@bot.message_handler(content_types=["document"])
+def scan_document(message: Message):
+    if message.chat.id != GROUP_ID:
+        return
+
+    file_name = message.document.file_name
+    file_link = f"https://t.me/c/{str(GROUP_ID)[4:]}/{message.message_id}"
+    now = datetime.now(timezone.utc).timestamp()
+
+    matched = False
+    for title in scanned_data:
+        if title.lower() in file_name.lower():
+            scanned_data[title].append({"name": file_name, "link": file_link, "timestamp": now})
+            matched = True
+            break
+
+    if not matched:
+        scanned_data[file_name] = [{"name": file_name, "link": file_link, "timestamp": now}]
+
+    save_data()
 
 print("🔥 Sydney Sweeney is online and serving sass 🎬")
 bot.polling(non_stop=True)
