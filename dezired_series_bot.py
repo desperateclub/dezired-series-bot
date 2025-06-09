@@ -1,138 +1,83 @@
 import os
-import pickle
-import time
-import random
-import re
-from collections import defaultdict
-from datetime import datetime, timezone
-
 import telebot
-from telebot.types import Message
+from telebot import types
+from datetime import datetime
 
-API_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID", "-1001234567890"))
-DATA_FILE = "scanned_data.pkl"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID"))  # Telegram group ID where the bot is scanning
 
-bot = telebot.TeleBot(API_TOKEN)
-scanned_data = defaultdict(list)
+bot = telebot.TeleBot(BOT_TOKEN)
+scanned_data = {}
 
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "rb") as f:
-        scanned_data = pickle.load(f)
+# Avoid replies to ".", "..", etc.
+IGNORED_QUERIES = {".", "..", "...", ",", "?", "-"}
 
-symbol_only_pattern = re.compile(r"^[.,\\-\\s]*$")
-
-emoji_map = {
-    "romance": "😍",
-    "action": "🔥",
-    "comedy": "😂",
-    "horror": "👻",
-    "sci-fi": "🤖",
-    "thriller": "😱",
-    "anime": "🌸",
-    "drama": "🎭"
-}
-
-fun_facts = [
-    "🎬 Did you know? The first feature film ever made was 'The Story of the Kelly Gang' in 1906.",
-    "🍿 Popcorn became popular in theaters during the Great Depression because it was cheap.",
-    "🎥 The longest movie ever made is over 85 hours long! It's called 'Logistics'.",
-    "📽️ Alfred Hitchcock never won an Oscar for Best Director.",
-    "🎞️ Spider-Man was the first film to make $100 million in a single weekend."
-]
-
-def save_data():
-    with open(DATA_FILE, "wb") as f:
-        pickle.dump(scanned_data, f)
-
-def search_movie(query):
-    query_lower = query.lower()
-    master_result = {}
-    part_links = []
-
-    for title, files in scanned_data.items():
-        if query_lower in title.lower():
-            part_links = files
-            master_result["title"] = title
-            master_result["files"] = files
-            break
-
-    return master_result, part_links
+def normalize(text):
+    return ''.join(e.lower() for e in text if e.isalnum())
 
 def clean_old_entries():
-    now = datetime.now(timezone.utc).timestamp()
-    for title in list(scanned_data.keys()):
+    now = datetime.now().timestamp()
+    for title in list(scanned_data):
         filtered = [f for f in scanned_data[title] if now - f["timestamp"] < 86400]
         if filtered:
             scanned_data[title] = filtered
         else:
             del scanned_data[title]
-    save_data()
 
-@bot.message_handler(func=lambda msg: True, content_types=["text"])
-def handle_message(message: Message):
+@bot.message_handler(content_types=['document'])
+def handle_new_files(message):
+    if message.chat.id != GROUP_ID:
+        return
+
+    if not message.document:
+        return
+
+    file_name = message.document.file_name
+    file_id = message.document.file_id
+    user_name = message.from_user.first_name
+    now = datetime.now().timestamp()
+
+    normalized_title = normalize(file_name.split('.')[0])
+
+    if normalized_title not in scanned_data:
+        scanned_data[normalized_title] = []
+
+    scanned_data[normalized_title].append({
+        "file_id": file_id,
+        "file_name": file_name,
+        "user": user_name,
+        "timestamp": now
+    })
+
+    print(f"[+] Added: {file_name} from {user_name}")
+
+@bot.message_handler(func=lambda message: True, content_types=['text'])
+def handle_message(message):
     if message.chat.id != GROUP_ID:
         return
 
     query = message.text.strip()
-    if symbol_only_pattern.match(query):
-        return
-
-    if query.lower() in ["hi", "hello", "hey"]:
-        bot.reply_to(message, f"Hey {message.from_user.first_name}! 🍿 Ask me for any movie!")
+    if query in IGNORED_QUERIES:
         return
 
     clean_old_entries()
-    result, parts = search_movie(query)
-    if result:
-        title = result["title"]
-        reply = f"🎬 *{title}*\n\n"
 
-        for category in emoji_map:
-            if category in title.lower():
-                reply += emoji_map[category] + "\n"
-                break
+    normalized_query = normalize(query)
+    matches = [
+        (title, files)
+        for title, files in scanned_data.items()
+        if normalized_query in title
+    ]
 
-        reply += "\nHere’s your download links:\n"
-        for file in parts:
-            reply += f"🔗 [{file['name']}]({file['link']})\n"
-
-        reply += f"\n🧲 *Master Link:* Coming soon or use parts above!\n"
-        reply += f"\n💡 {random.choice(fun_facts)}"
-
-        bot.reply_to(message, reply, parse_mode="Markdown")
+    if matches:
+        response = f"🎬 <b>Results for:</b> <code>{query}</code>\n\n"
+        for title, files in matches[:3]:
+            latest = sorted(files, key=lambda x: x['timestamp'], reverse=True)[0]
+            response += f"🎥 <b>{latest['file_name']}</b>\nUploaded by: {latest['user']}\n\n"
+            bot.send_document(message.chat.id, latest['file_id'])
+        bot.send_message(message.chat.id, response, parse_mode='HTML')
     else:
-        suggestions = [
-            title for title in scanned_data.keys()
-            if query.lower()[:4] in title.lower()
-        ][:3]
-
-        suggestion_text = ""
-        if suggestions:
-            suggestion_text = "\n\n🔍 Did you mean:\n" + "\n".join(f"• {s}" for s in suggestions)
-
-        bot.reply_to(message, f"❌ Couldn't find anything for *{query}*{suggestion_text}", parse_mode="Markdown")
-
-@bot.message_handler(content_types=["document"])
-def scan_document(message: Message):
-    if message.chat.id != GROUP_ID:
-        return
-
-    file_name = message.document.file_name
-    file_link = f"https://t.me/c/{str(GROUP_ID)[4:]}/{message.message_id}"
-    now = datetime.now(timezone.utc).timestamp()
-
-    matched = False
-    for title in scanned_data:
-        if title.lower() in file_name.lower():
-            scanned_data[title].append({"name": file_name, "link": file_link, "timestamp": now})
-            matched = True
-            break
-
-    if not matched:
-        scanned_data[file_name] = [{"name": file_name, "link": file_link, "timestamp": now}]
-
-    save_data()
+        bot.send_message(message.chat.id, f"😔 Couldn't find anything matching <code>{query}</code>", parse_mode='HTML')
 
 print("🔥 Sydney Sweeney is online and serving sass 🎬")
 bot.polling(non_stop=True)
