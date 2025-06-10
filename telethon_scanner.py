@@ -1,33 +1,28 @@
+import os, json
 from telethon.sync import TelegramClient
-from telethon.tl.types import DocumentAttributeFilename
-import os
-import json
+from telethon.sessions import StringSession
 
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-session_str = os.getenv("TELETHON_SESSION_STRING")
-group_id = int(os.getenv("GROUP_ID"))
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+SESSION_STRING = os.getenv("SESSION_STRING")
+GROUP_ID = int(os.getenv("GROUP_ID"))
+DATA_FILE = "scanned_data.json"
 
-data_file = "scanned_data.json"
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# Load existing data
-try:
-    with open(data_file, "r") as f:
-        scanned_data = json.load(f)
-except:
-    scanned_data = {}
-
-client = TelegramClient(StringSession(session_str), api_id, api_hash)
-
-async def scan_history():
-    async with client:
-        async for message in client.iter_messages(group_id, limit=None):
-            if message.document and message.file and message.file.name:
-                title = message.file.name.rsplit(".", 1)[0].lower().strip()
-                scanned_data[title] = {
-                    "file_id": message.id,
-                    "name": message.file.name
+def scan_history():
+    data = {}
+    with client:
+        for msg in client.iter_messages(GROUP_ID, limit=None):
+            if msg.document and msg.document.file_name:
+                key = msg.document.file_name.lower().rsplit('.', 1)[0]
+                data[key] = {
+                    "file_name": msg.document.file_name,
+                    "message_id": msg.id
                 }
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"✅ Scanned {len(data)} files.")
 
-        with open(data_file, "w") as f:
-            json.dump(scanned_data, f, indent=2)
+if __name__ == "__main__":
+    scan_history()
