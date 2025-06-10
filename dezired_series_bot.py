@@ -1,65 +1,44 @@
-import os
-import json
-import re
-import time
-import random
+import os, json, re, random
 import telebot
-from dotenv import load_dotenv
-
-load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 DATA_FILE = "scanned_data.json"
-
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Load scanned data
 try:
-    with open(DATA_FILE, "r") as f:
+    with open(DATA_FILE) as f:
         scanned_data = json.load(f)
-except FileNotFoundError:
+except:
     scanned_data = {}
 
-# Helper to normalize text
-def normalize(text):
-    return re.sub(r'[^a-z0-9]', '', text.lower())
+normalize = lambda t: re.sub(r'[^a-z0-9]', '', t.lower())
 
-# 🔍 Manual history scan using Telethon
 @bot.message_handler(commands=["scan_history"])
-def do_scan_history(message):
-    if message.chat.id != GROUP_ID:
-        bot.reply_to(message, "⛔️ This command only works in the group.")
-        return
-
-    msg = bot.reply_to(message, "⏳ Scanning group history... This may take a while.")
+def cmd_scan(m):
+    if m.chat.id != GROUP_ID: return
+    msg = bot.reply_to(m, "🔍 Scanning group history...")
     os.system("python3 telethon_scanner.py")
-
-    # Reload scanned data after scan
-    global scanned_data
     try:
-        with open(DATA_FILE, "r") as f:
+        with open(DATA_FILE) as f:
+            global scanned_data
             scanned_data = json.load(f)
-        bot.edit_message_text("✅ History scan complete. You can now search!", message.chat.id, msg.message_id)
-    except Exception as e:
-        bot.edit_message_text(f"❌ Failed to load scan data.\n{str(e)}", message.chat.id, msg.message_id)
+        bot.send_message(GROUP_ID, f"✅ Scan complete. {len(scanned_data)} files recorded.")
+    except:
+        bot.edit_message_text("❌ Scan failed.", GROUP_ID, msg.message_id)
 
-# 🎯 Main search logic
-@bot.message_handler(func=lambda msg: msg.chat.id == GROUP_ID and msg.content_type == "text")
-def search_file(message):
-    query = message.text.strip()
-    if not query or len(query) < 2 or query.startswith(("/", ".")):
-        return
-
-    normalized_query = normalize(query)
-
+@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID and m.content_type == "text")
+def search(m):
+    q = m.text.strip()
+    if not q or q.startswith((".", "/", "..")): return
+    key = normalize(q)
     for title, info in scanned_data.items():
-        if normalized_query in normalize(title):
-            link = f"https://t.me/c/{str(GROUP_ID)[4:]}/{info['message_id']}"
-            bot.reply_to(message, f"🎬 *{info['file_name']}*\n🔗 {link}", parse_mode="Markdown")
+        if key in normalize(title):
+            ln = f"https://t.me/c/{str(GROUP_ID)[4:]}/{info['message_id']}"
+            emoji = random.choice(["🔥","😂","🎬"])
+            bot.reply_to(m, f"{emoji} *{info['file_name']}*\n🔗 {ln}", parse_mode="Markdown", disable_web_page_preview=True)
             return
+    bot.reply_to(m, f"❌ *{q}* not found. Try /scan_history first!", parse_mode="Markdown")
 
-    bot.reply_to(message, f"❌ *{query}* not found. Try /scan_history if files were recently uploaded.", parse_mode="Markdown")
-
-print("🔥 Sydney Sweeney is online and serving sass 🎬")
+print("⚡ Sydney Sweeney is online.")
 bot.infinity_polling(skip_pending=True)
