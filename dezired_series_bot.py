@@ -1,85 +1,85 @@
 import os
 import pickle
 import time
-import re
 import random
+import re
 from datetime import datetime, timezone
+
 import telebot
-from telebot.types import Message
+from telebot import types
 
-TOKEN = os.getenv("BOT_TOKEN")         # Set this in Railway
-GROUP_ID = int(os.getenv("GROUP_ID")) # e.g. -1001612892172
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 
-bot = telebot.TeleBot(TOKEN)
+# Load env from Railway
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID"))
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+
+# TeleBot setup
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# Telethon setup
+with open("session_string.txt") as f:
+    session_str = f.read().strip()
+
+client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+client.start()
+
+# Chat data store
 DATA_FILE = "scanned_data.pkl"
-
-# Load existing data
 try:
     with open(DATA_FILE, "rb") as f:
-        scanned_data = pickle.load(f)
+        scanned = pickle.load(f)
 except:
-    scanned_data = {}
-
-# Ignore these
-ignore_q = {".", "..", "...", ",", "-", "_"}
+    scanned = {}
 
 def save_data():
     with open(DATA_FILE, "wb") as f:
-        pickle.dump(scanned_data, f)
+        pickle.dump(scanned, f)
 
-def safe_text(txt):
-    return re.sub(r'[^a-z0-9]', '', txt.lower())
+def normal(text):
+    return re.sub(r'[^a-z0-9]', '', text.lower())
 
-def clean_title(fn):
-    return safe_text(os.path.splitext(fn)[0])
-
-def purge_old():
-    now = time.time()
-    for title in list(scanned_data.keys()):
-        files = scanned_data[title]
-        files = [f for f in files if now - f["ts"] < 86400]
-        if files: scanned_data[title] = files
-        else: scanned_data.pop(title)
-    save_data()
-
-@bot.message_handler(commands=["scan_history"])
-def do_scan_history(m: Message):
-    if m.chat.id != GROUP_ID:
-        return
+def scan_history():
     count = 0
-    for msg in bot.get_chat_history(GROUP_ID, limit=500):
+    for msg in client.iter_messages(GROUP_ID, limit=1000):
         if msg.document:
-            key = clean_title(msg.document.file_name)
-            link = f"https://t.me/c/{str(GROUP_ID)[4:]}/{msg.message_id}"
-            entry = {"fn": msg.document.file_name, "link": link, "ts": time.time()}
-            scanned_data.setdefault(key, []).append(entry)
+            key = normal(msg.document.file_name)
+            ln = f"https://t.me/c/{str(GROUP_ID)[4:]}/{msg.id}"
+            scanned.setdefault(key, []).append({
+                "name": msg.document.file_name,
+                "link": ln,
+                "ts": time.time()
+            })
             count += 1
     save_data()
-    bot.reply_to(m, f"✅ Scanned {count} files from history.")
+    return count
 
-@bot.message_handler(commands=["start"])
-def hello(m: Message):
-    bot.reply_to(m, "Hey, I'm Sydney Sweeney 🍿 — Drop a movie or series name, I'll find it!")
-
-@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID and m.content_type=="text")
-def search(m: Message):
-    q = m.text.strip()
-    if q in ignore_q:
+# Command to trigger scanning
+@bot.message_handler(commands=["scan_history"])
+def handle_scan(m):
+    if m.chat.id != GROUP_ID:
         return
-    purge_old()
-    sq = safe_text(q)
-    for title, files in scanned_data.items():
-        if sq in title:
-            # Build response
-            lines = []
-            master = files[0]["link"]
-            lines.append(f"🧲 **Master Link:** {master}")
-            for i, f in enumerate(files[1:], 2):
-                lines.append(f"• Part {i}: {f['link']}")
-            emoji = "🔥" if "action" in title else random.choice(["😍","😂","🎥"])
-            response = f"{emoji} *Found:* {files[0]['fn']}\n" + "\n".join(lines)
-            bot.reply_to(m, response, parse_mode="Markdown", disable_web_page_preview=True)
-            return
-    bot.reply_to(m, f"❌ Couldn't find *{q}*. Try again or run /scan_history?", parse_mode="Markdown")
+    bot.reply_to(m, "🔍 Scanning history, hold on...")
+    num = scan_history()
+    bot.send_message(GROUP_ID, f"✅ History scanned! {num} files recorded.")
 
+# Search handler
+@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID and m.content_type == "text")
+def handle_search(m):
+    q = m.text.strip()
+    if q in {".", "..", "...", ",", "-"}:
+        return
+    key = normal(q)
+    for title, files in scanned.items():
+        if key in title:
+            lines = [f"{f['name']} → {f['link']}" for f in files]
+            bot.reply_to(m, "🎬 Here you go:\n" + "\n".join(lines))
+            return
+    bot.reply_to(m, f"❌ No match for *{q}*.\nTry running /scan_history", parse_mode="Markdown")
+
+# Start the bot
+print("⚡ Sydney Sweeney is online.")
 bot.infinity_polling(skip_pending=True)
