@@ -1,3 +1,13 @@
+from telethon.sync import TelegramClient
+from telethon.sessions import StringSession
+import os
+
+session_string = os.getenv("SESSION_STRING")
+api_id = int(os.getenv("API_ID"))  # set this in Railway
+api_hash = os.getenv("API_HASH")   # set this in Railway
+
+telethon_client = TelegramClient(StringSession(session_string), api_id, api_hash)
+
 import os, json, re, random
 import telebot
 
