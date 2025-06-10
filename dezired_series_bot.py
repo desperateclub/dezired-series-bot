@@ -24,18 +24,23 @@ except:
 
 normalize = lambda t: re.sub(r'[^a-z0-9]', '', t.lower())
 
-@bot.message_handler(commands=["scan_history"])
-def cmd_scan(m):
-    if m.chat.id != GROUP_ID: return
-    msg = bot.reply_to(m, "🔍 Scanning group history...")
-    os.system("python3 telethon_scanner.py")
-    try:
-        with open(DATA_FILE) as f:
-            global scanned_data
-            scanned_data = json.load(f)
-        bot.send_message(GROUP_ID, f"✅ Scan complete. {len(scanned_data)} files recorded.")
-    except:
-        bot.edit_message_text("❌ Scan failed.", GROUP_ID, msg.message_id)
+@bot.message_handler(commands=['scan_history'])
+def scan_history(message):
+    with telethon_client:
+        messages = telethon_client.iter_messages(GROUP_ID, limit=500)
+        count = 0
+        for msg in messages:
+            if msg.file and msg.file.name:
+                file_title = clean_title(msg.file.name)
+                if file_title not in scanned_data:
+                    scanned_data[file_title] = []
+                scanned_data[file_title].append({
+                    "file_name": msg.file.name,
+                    "file_id": msg.id,
+                    "timestamp": time.time()
+                })
+                count += 1
+        bot.reply_to(message, f"✅ Scanned {count} files from history.")
 
 @bot.message_handler(func=lambda m: m.chat.id == GROUP_ID and m.content_type == "text")
 def search(m):
