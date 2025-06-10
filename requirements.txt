@@ -1,1 +1,4 @@
-pyTelegramBotAPI==4.15.4
+pyTelegramBotAPI==4.15.3
+telethon==2.30.0
+python-dotenv==1.0.1
+fuzzywuzzy
